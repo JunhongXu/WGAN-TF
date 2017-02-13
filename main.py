@@ -11,3 +11,6 @@ with tf.Session() as sess:
     for v in dcgan.g_params:
         print(v.name)
         print(v.get_shape())
+
+    for v in tf.get_default_graph().as_graph_def().node:
+        print(v)

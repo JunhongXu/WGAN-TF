@@ -2,10 +2,8 @@ import tensorflow as tf
 from tensorflow.contrib import layers as layers
 import os
 from src.utilities import *
+import numpy as np
 
-
-# TODO: create clipping operation to clip the variables in GAN
-# TODO: Finish training pipeline for DCGAN
 # TODO: Finish MLP
 
 class GAN(object):
@@ -46,6 +44,11 @@ class GAN(object):
         self.g_size = g_size
         self.d_size = d_size
         self.clip = clip
+        self.n_critic = n_critic
+
+        with tf.variable_scope("step"):
+            self.global_step = tf.Variable(name="global_step", dtype=tf.int32, initial_value=0)
+            self.global_epoch = tf.Variable(name="global_epoch", dtype=tf.int32, initial_value=0)
 
         self.images_train_dir, self.images_test_dir, self.log_dir, self.model_dir = self._create_dir()
 
@@ -63,17 +66,12 @@ class GAN(object):
         self.fake_data_score = self.critic(self.fake_data, reuse=True, is_train=True)
 
         # evaluate generator
-        self.sample = self.generator(True, True)
+        self.sample = self.generator(True, False)
 
         self.g_params = [v for v in tf.trainable_variables() if 'generator' in v.name]
         self.c_params = [v for v in tf.trainable_variables() if "critic" in v.name]
 
-        self.sess.run(tf.global_variables_initializer())
-
-        self.writer = tf.summary.FileWriter(self.log_dir)
-        self.saver = tf.train.Saver()
-
-    def train(self, max_epoch):
+    def train(self, data, max_epoch):
         NotImplementedError()
 
     def critic(self, x, reuse, is_train):
@@ -130,6 +128,20 @@ class DCGAN(GAN):
         """
         super(DCGAN, self).__init__(sess, name, batch_size, image_size, z_dim, g_size, d_size,
                                     optimizer, critic_lr, generator_lr)
+        self.weight_clipping = self._weight_clipping_op()
+
+        self.opt_c, self.opt_g, self.critic_loss, self.g_loss = self.build()
+
+        self.sess.run(tf.global_variables_initializer())
+
+        self.writer = tf.summary.FileWriter(self.log_dir, graph=sess.graph)
+        self.saver = tf.train.Saver()
+
+        # add summary
+        tf.summary.scalar('critic_loss', self.critic_loss)
+        tf.summary.scalar('generator_loss', self.g_loss)
+
+        self.merged = tf.summary.merge_all()
 
     def critic(self, x, reuse, is_train):
         # normalization parameters used for batch normalization
@@ -178,26 +190,48 @@ class DCGAN(GAN):
         return y
 
     def build(self):
-        with tf.name_scope("critic_optimizer"):
-            critic_optimizer = self.optimizer(learning_rate=self.critic_lr)
-            real_data_loss = tf.reduce_mean(self.real_data_score, name="real_data_loss")
-            fake_data_loss = tf.reduce_mean(self.fake_data_score, name="fake_data_loss")
-            critic_loss = fake_data_loss - real_data_loss
-            opt_c = critic_optimizer.minimize(critic_loss, var_list=self.c_params)
+        critic_loss = tf.reduce_mean(self.fake_data_score - self.real_data_score, name="critic_loss")
+        opt_c = layers.optimize_loss(critic_loss, self.global_step, optimizer=self.optimizer(self.critic_lr),
+                                     variables=self.c_params, learning_rate=self.critic_lr, name='critic_optimizer',
+                                     summaries='gradient_norm')
 
-        with tf.name_scope("generator_optimizer"):
-            generator_optimizer = self.optimizer(learning_rate=self.generator_lr)
-            g_loss = - tf.reduce_mean(self.fake_data_score, "generator_loss")
-            opt_g = generator_optimizer.minimize(g_loss, var_list=self.g_params)
-        return opt_c, opt_g, real_data_loss, fake_data_loss, critic_loss, g_loss
+        g_loss = tf.reduce_mean(-self.fake_data_score, name="generator_loss")
+        opt_g = layers.optimize_loss(g_loss, self.global_step, optimizer=self.optimizer(self.generator_lr),
+                                     variables=self.g_params, learning_rate=self.generator_lr,
+                                     name='generator_optimizer', summaries='gradient_norm')
+        return opt_c, opt_g, critic_loss, g_loss
 
-    def _clip_weights(self):
-        pass
+    def _weight_clipping_op(self):
+        """
+            returns the op of critic weight clipping
+        """
+        with tf.name_scope('weight_clipping'):
+            clipped_weights = [tf.assign(var, tf.clip_by_value(var, -self.clip, self.clip))
+                               for var in self.c_params]
+            clipped_weights = tf.tuple(clipped_weights)
+        return clipped_weights
 
-    def train(self, max_epoch):
-        pass
+    def train(self, data, max_steps, print_every=100):
+        for step in range(max_steps):
+            # get training samples
+            batch = data.next_batch(self.batch_size)
+            # get input to generator
+            z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
+            # train critic
+            for i in range(self.n_critic):
+                critic_loss, summary, _ = self.sess.run([self.critic_loss, self.merged, self.opt_c],
+                                                        feed_dict={self.x: batch, self.z: z})
+                # clip the weights
+                self.sess.run(self.weight_clipping)
 
+            # re-sample
+            batch = data.next_batch(self.batch_size)
+            z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
+            g_loss, summary, _ = self.sess.run([self.g_loss, self.merged, self.opt_g],
+                                               feed_dict={self.x: batch, self.z: z})
 
-class MLP(GAN):
-    def __init__(self):
-        pass
+            if step % print_every == 0:
+                print("At step %s/%s, generator loss %s, critic loss %s" % (step, max_steps, g_loss, critic_loss))
+            # TODO: add summary
+            # TODO: split generator's summary and critic's summary
+
