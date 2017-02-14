@@ -3,12 +3,13 @@ from tensorflow.contrib import layers as layers
 import os
 from src.utilities import *
 import numpy as np
-
+from scipy.misc import imsave
 # TODO: Finish MLP
+
 
 class GAN(object):
     def __init__(self, sess, name, batch_size=128, image_size=(32, 32, 3), z_dim=100, g_size=64, d_size=64,
-                 optimizer=tf.train.RMSPropOptimizer, critic_lr=5e-5, generator_lr=5e-5, clip=1e-2, n_critic=5):
+                 optimizer=tf.train.RMSPropOptimizer, critic_lr=5e-5, generator_lr=5e-5, clip=0.01, n_critic=5):
         """
         Parameters:
             sess: tf.Session()
@@ -120,7 +121,7 @@ class DCGAN(GAN):
     """
     Implementation of WGAN. Original paper can be found at "https://arxiv.org/abs/1701.07875"
     """
-    def __init__(self, sess, name, batch_size=128, image_size=(32, 32, 3), z_dim=100, g_size=64, d_size=64,
+    def __init__(self, sess, name, batch_size=64, image_size=(32, 32, 3), z_dim=100, g_size=64, d_size=64,
                  optimizer=tf.train.RMSPropOptimizer, critic_lr=5e-5, generator_lr=5e-5):
         """
             d_size is the initial number of kernels for critic. It will be multiplied by 2 for the next layer.
@@ -137,60 +138,70 @@ class DCGAN(GAN):
         self.writer = tf.summary.FileWriter(self.log_dir, graph=sess.graph)
         self.saver = tf.train.Saver()
 
-        # add summary
-        tf.summary.scalar('critic_loss', self.critic_loss)
-        tf.summary.scalar('generator_loss', self.g_loss)
-
-        self.merged = tf.summary.merge_all()
+        # generator summary
+        g_grad_summ = tf.get_collection(tf.GraphKeys.SUMMARIES, scope='generator')
+        self.g_summ = tf.summary.merge(g_grad_summ + [tf.summary.scalar('generator_loss', self.g_loss)],
+                                       name='g_summary')
+        # critic summary
+        c_grad_summ = tf.get_collection(tf.GraphKeys.SUMMARIES, scope='critic')
+        self.c_summ = tf.summary.merge(c_grad_summ + [tf.summary.scalar('critic_loss', self.g_loss)], name='c_summary')
 
     def critic(self, x, reuse, is_train):
         # normalization parameters used for batch normalization
-        normalization_params = {'scale': True, 'is_training': is_train, 'decay': 0.9, 'updates_collections': None}
-
-        with tf.variable_scope("critic", reuse=reuse, initializer=tf.random_normal_initializer(0, 0.02)):
+        normalization_params = {'is_training': is_train, 'decay': 0.9, 'updates_collections': None}
+        weight_initializer = tf.random_normal_initializer(0, 0.02)
+        with tf.variable_scope("critic", reuse=reuse):
             y = layers.conv2d(x, self.g_size, (3, 3), stride=2, activation_fn=lkrelu, normalizer_fn=layers.batch_norm,
-                              normalizer_params=normalization_params, scope="conv1")
+                              normalizer_params=normalization_params, scope="conv1",
+                              weights_initializer=weight_initializer)
 
             y = layers.conv2d(y, self.g_size*2, (3, 3), stride=2, activation_fn=lkrelu, normalizer_fn=layers.batch_norm,
-                              normalizer_params=normalization_params, scope="conv2")
+                              normalizer_params=normalization_params, scope="conv2",
+                              weights_initializer=weight_initializer)
 
             y = layers.conv2d(y, self.g_size*4, (3, 3), stride=2, activation_fn=lkrelu, normalizer_fn=layers.batch_norm,
-                              normalizer_params=normalization_params, scope="conv3")
+                              normalizer_params=normalization_params, scope="conv3",
+                              weights_initializer=weight_initializer)
 
             y = layers.conv2d(y, self.g_size*8, (3, 3), stride=2, activation_fn=lkrelu, normalizer_fn=layers.batch_norm,
-                              normalizer_params=normalization_params, scope="conv4")
+                              normalizer_params=normalization_params, scope="conv4",
+                              weights_initializer=weight_initializer)
 
             # the output layer, remove sigmoid function
-            y = layers.fully_connected(tf.reshape(y, (self.batch_size, -1)), num_outputs=1,
-                                       normalizer_fn=layers.batch_norm, activation_fn=None,
-                                       normalizer_params=normalization_params, scope="dense_layer")
+            y = layers.fully_connected(tf.reshape(y, (self.batch_size, -1)), num_outputs=1, activation_fn=None,
+                                       weights_initializer=weight_initializer, normalizer_fn=layers.batch_norm,
+                                       normalizer_params=normalization_params,
+                                       scope="dense_layer")
         return y
 
     def generator(self, reuse, is_train):
         # normalization parameters used for batch normalization
-        normalization_params = {'scale': True, 'is_training': is_train, 'decay': 0.9, 'updates_collections': None}
-
-        with tf.variable_scope('generator', reuse=reuse, initializer=tf.random_normal_initializer(0, 0.02)):
+        normalization_params = {'is_training': is_train, 'decay': 0.9, 'updates_collections': None}
+        weight_initializer = tf.random_normal_initializer(0, 0.02)
+        with tf.variable_scope('generator', reuse=reuse):
             # first dense layer to convert input z to H/8, W/8, g_size*8
             y = layers.fully_connected(self.z, num_outputs=self.H//8*self.W//8*self.g_size*8, activation_fn=tf.nn.relu,
                                        normalizer_fn=layers.batch_norm, normalizer_params=normalization_params,
-                                       scope="dense_layer")
+                                       scope="dense_layer", weights_initializer=weight_initializer)
             y = tf.reshape(y, (self.batch_size, self.H//8, self.W//8, self.g_size*8))
             y = layers.conv2d_transpose(y, self.g_size*4, 3, stride=2, activation_fn=tf.nn.relu,
                                         normalizer_fn=layers.batch_norm, normalizer_params=normalization_params,
-                                        scope="deconv1")
+                                        scope="deconv1", weights_initializer=weight_initializer)
             y = layers.conv2d_transpose(y, self.g_size*2, 3, stride=2, activation_fn=tf.nn.relu,
                                         normalizer_fn=layers.batch_norm, normalizer_params=normalization_params,
-                                        scope="deconv2")
+                                        scope="deconv2", weights_initializer=weight_initializer)
             y = layers.conv2d_transpose(y, self.g_size*1, 3, stride=2, activation_fn=tf.nn.relu,
                                         normalizer_fn=layers.batch_norm, normalizer_params=normalization_params,
-                                        scope="deconv3")
-            y = layers.conv2d_transpose(y, self.C, 3, activation_fn=tf.nn.tanh, stride=1, normalizer_fn=layers.batch_norm,
+                                        scope="deconv3", weights_initializer=weight_initializer)
+
+            y = layers.conv2d_transpose(y, self.C, 3, activation_fn=tf.nn.tanh, stride=1,
+                                        normalizer_fn=layers.batch_norm,
+                                        weights_initializer=weight_initializer,
                                         normalizer_params=normalization_params, scope="deconv4")
         return y
 
     def build(self):
-        critic_loss = tf.reduce_mean(self.fake_data_score - self.real_data_score, name="critic_loss")
+        critic_loss = tf.reduce_mean(self.fake_data_score-self.real_data_score, name="critic_loss")
         opt_c = layers.optimize_loss(critic_loss, self.global_step, optimizer=self.optimizer(self.critic_lr),
                                      variables=self.c_params, learning_rate=self.critic_lr, name='critic_optimizer',
                                      summaries='gradient_norm')
@@ -208,30 +219,39 @@ class DCGAN(GAN):
         with tf.name_scope('weight_clipping'):
             clipped_weights = [tf.assign(var, tf.clip_by_value(var, -self.clip, self.clip))
                                for var in self.c_params]
-            clipped_weights = tf.tuple(clipped_weights)
         return clipped_weights
 
     def train(self, data, max_steps, print_every=100):
         for step in range(max_steps):
             # get training samples
-            batch = data.next_batch(self.batch_size)
+            batch = data.next_batch(self.batch_size)[0]
+            # TODO: Need to put this into DataSet class, just to test if the implementation is correct or not for temporary use.
+            batch = np.pad(batch, ((0, 0), (2, 2), (2, 2), (0, 0)), 'constant', constant_values=0.0)
             # get input to generator
             z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
             # train critic
             for i in range(self.n_critic):
-                critic_loss, summary, _ = self.sess.run([self.critic_loss, self.merged, self.opt_c],
-                                                        feed_dict={self.x: batch, self.z: z})
+
+                critic_loss, c_summary, _ = self.sess.run([self.critic_loss, self.c_summ, self.opt_c],
+                                                          feed_dict={self.x: batch, self.z: z})
                 # clip the weights
                 self.sess.run(self.weight_clipping)
-
-            # re-sample
-            batch = data.next_batch(self.batch_size)
+                # re-sample
+            self.writer.add_summary(c_summary, global_step=step)
+            batch = data.next_batch(self.batch_size)[0]
+            # TODO: Need to put this into DataSet class, just to test if the implementation is correct or not for temporary use.
+            batch = np.pad(batch, ((0, 0), (2, 2), (2, 2), (0, 0)), 'constant', constant_values=0.0)
             z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
-            g_loss, summary, _ = self.sess.run([self.g_loss, self.merged, self.opt_g],
-                                               feed_dict={self.x: batch, self.z: z})
-
+            g_loss, g_summary, _ = self.sess.run([self.g_loss, self.g_summ, self.opt_g],
+                                                 feed_dict={self.x: batch, self.z: z})
+            self.writer.add_summary(g_summary, step)
             if step % print_every == 0:
                 print("At step %s/%s, generator loss %s, critic loss %s" % (step, max_steps, g_loss, critic_loss))
-            # TODO: add summary
-            # TODO: split generator's summary and critic's summary
+                # sample images
+                z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
+                images = self.sess.run(self.sample, feed_dict={self.z: z})
+                random_index = np.random.randint(0, self.batch_size)
+                image = images[random_index].reshape(self.H, self.W) if self.C == 1 else \
+                    images[random_index].reshape(self.H, self.W, self.C)
+                imsave(os.path.join(self.images_train_dir, "%s.png" % step), image)
 

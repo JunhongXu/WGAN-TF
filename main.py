@@ -1,16 +1,12 @@
 from src.wgan import DCGAN
 import tensorflow as tf
+from tensorflow.examples.tutorials.mnist import input_data
 
+
+H, W, C = 32, 32, 1
+data = input_data.read_data_sets('MNIST_data', reshape=False)
 
 with tf.Session() as sess:
-    dcgan = DCGAN(sess, 'test')
-    for v in dcgan.c_params:
-        print(v.name)
-        print(v.get_shape())
+    dcgan = DCGAN(sess, 'test', g_size=32, d_size=32, image_size=(H, W, C))
+    dcgan.train(data.train, 100000, 100)
 
-    for v in dcgan.g_params:
-        print(v.name)
-        print(v.get_shape())
-
-    for v in tf.get_default_graph().as_graph_def().node:
-        print(v)
