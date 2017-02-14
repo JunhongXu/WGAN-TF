@@ -144,7 +144,8 @@ class DCGAN(GAN):
                                        name='g_summary')
         # critic summary
         c_grad_summ = tf.get_collection(tf.GraphKeys.SUMMARIES, scope='critic')
-        self.c_summ = tf.summary.merge(c_grad_summ + [tf.summary.scalar('critic_loss', self.g_loss)], name='c_summary')
+        self.c_summ = tf.summary.merge(c_grad_summ + [tf.summary.scalar('critic_loss', self.critic_loss)],
+                                       name='c_summary')
 
     def critic(self, x, reuse, is_train):
         # normalization parameters used for batch normalization
@@ -169,8 +170,7 @@ class DCGAN(GAN):
 
             # the output layer, remove sigmoid function
             y = layers.fully_connected(tf.reshape(y, (self.batch_size, -1)), num_outputs=1, activation_fn=None,
-                                       weights_initializer=weight_initializer, normalizer_fn=layers.batch_norm,
-                                       normalizer_params=normalization_params,
+                                       weights_initializer=weight_initializer,
                                        scope="dense_layer")
         return y
 
@@ -195,9 +195,7 @@ class DCGAN(GAN):
                                         scope="deconv3", weights_initializer=weight_initializer)
 
             y = layers.conv2d_transpose(y, self.C, 3, activation_fn=tf.nn.tanh, stride=1,
-                                        normalizer_fn=layers.batch_norm,
-                                        weights_initializer=weight_initializer,
-                                        normalizer_params=normalization_params, scope="deconv4")
+                                        weights_initializer=weight_initializer, scope="deconv4")
         return y
 
     def build(self):
