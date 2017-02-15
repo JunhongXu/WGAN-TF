@@ -224,6 +224,7 @@ class DCGAN(GAN):
 
     def train(self, data, max_epochs, print_every=100):
         gen_iter = 0
+        max_iter = data.num_examples//self.batch_size * max_epochs
         while data.epochs_completed < max_epochs:
             # train critic network for d_iter steps
             if gen_iter < 25 or gen_iter % 500 == 0:
@@ -240,8 +241,10 @@ class DCGAN(GAN):
             gen_iter += 1
 
             if gen_iter % print_every == 0:
-                print("[*]At epoch %s/%s, generator loss %s, critic loss %s" % (data.epochs_completed,
-                                                                            max_epochs, g_loss, critic_loss))
+                print("[*]Epoch [%s/%s]/Iteration[%s/%s], generator loss %s, critic loss %s" % (data.epochs_completed,
+                                                                                                max_epochs, gen_iter,
+                                                                                                max_iter, g_loss,
+                                                                                                critic_loss))
                 # sample images
                 z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
                 self.evaluate(z, step=gen_iter)
