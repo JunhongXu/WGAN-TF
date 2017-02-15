@@ -10,7 +10,7 @@ class DataSet(object):
         # random shuffle the data
         np.random.shuffle(data)
 
-    def next_batch(self, batch_size):
+    def next_batch(self, batch_size, increment_epoch=True):
         """
         Gives the next batch in this dataset
         """
@@ -21,7 +21,8 @@ class DataSet(object):
             np.random.shuffle(permutation)
             self.data = self.data[permutation]
             self._index_in_epoch = batch_size
-            self.epochs_completed += 1
+            if increment_epoch:
+                self.epochs_completed += 1
             start = 0
         end = self._index_in_epoch
         return self.data[start: end]

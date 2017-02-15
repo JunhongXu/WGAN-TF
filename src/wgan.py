@@ -101,7 +101,7 @@ class GAN(object):
         images_train_dir = os.path.join('images', self.name, 'train')
         images_test_dir = os.path.join('images', self.name, 'test')
         log_dir = os.path.join('log', self.name)
-        model_dir = os.path.join('model', self.name)
+        model_dir = os.path.join('checkpoint', self.name)
         if not os.path.exists(images_train_dir):
             os.makedirs(images_train_dir)
 
@@ -222,33 +222,71 @@ class DCGAN(GAN):
                                for var in self.c_params]
         return clipped_weights
 
-    def train(self, data, max_steps, print_every=100):
-        for step in range(max_steps):
-            # get training samples
-            batch = data.next_batch(self.batch_size)
-            # get input to generator
-            z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
-            # train critic
-            for i in range(self.n_critic):
+    def train(self, data, max_epochs, print_every=100):
+        gen_iter = 0
+        while data.epochs_completed < max_epochs:
+            # train critic network for d_iter steps
+            if gen_iter < 25 or gen_iter % 500 == 0:
+                d_iter = 100
+            else:
+                d_iter = self.n_critic
 
-                critic_loss, c_summary, _ = self.sess.run([self.critic_loss, self.c_summ, self.opt_c],
-                                                          feed_dict={self.x: batch, self.z: z})
-                # clip the weights
-                self.sess.run(self.weight_clipping)
-                # re-sample
-            self.writer.add_summary(c_summary, global_step=step)
-            batch = data.next_batch(self.batch_size)
-            z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
-            g_loss, g_summary, _ = self.sess.run([self.g_loss, self.g_summ, self.opt_g],
-                                                 feed_dict={self.x: batch, self.z: z})
-            self.writer.add_summary(g_summary, step)
-            if step % print_every == 0:
-                print("At step %s/%s, generator loss %s, critic loss %s" % (step, max_steps, g_loss, critic_loss))
+            # train critic network
+            critic_loss = self._update_critic(data, d_iter)
+
+            # update generator network
+            g_loss = self._update_gen(data, gen_iter)
+
+            gen_iter += 1
+
+            if gen_iter % print_every == 0:
+                print("[*]At epoch %s/%s, generator loss %s, critic loss %s" % (data.epochs_completed,
+                                                                            max_epochs, g_loss, critic_loss))
                 # sample images
                 z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
-                images = self.sess.run(self.sample, feed_dict={self.z: z})
-                random_index = np.random.randint(0, self.batch_size)
-                image = images[random_index].reshape(self.H, self.W) if self.C == 1 else \
-                    images[random_index].reshape(self.H, self.W, self.C)
-                imsave(os.path.join(self.images_train_dir, "%s.png" % step), image)
+                self.evaluate(z, step=gen_iter)
 
+            if gen_iter % 1000 == 0:
+                self._save()
+
+    def evaluate(self, z, num_sample=1, is_train=True, step=None):
+        assert num_sample < self.batch_size, "%s should be smaller than batch size"
+        if is_train:
+            save_path = self.images_train_dir
+        else:
+            save_path = self.images_test_dir
+
+        fake_images = self.sess.run(self.sample, feed_dict={self.z: z})
+        # sample from fake images
+        random_index = np.random.randint(0, self.batch_size, num_sample)
+
+        fake_images = fake_images[random_index].reshape(num_sample, self.H, self.W) if self.C == 1 else \
+                        fake_images[random_index].reshape(num_sample, self.H, self.W, self.C)
+        for index, fake_image in enumerate(fake_images):
+            imsave(os.path.join(save_path, "%s.png" % step if step is not None else index), fake_image)
+        print('[*]Image saving completed.')
+
+    def _save(self):
+        self.saver.save(self.sess, os.path.join(self.model_dir, '%s.ckpt' % self.name))
+        print('[*]Model saving completed!')
+
+    def _update_critic(self, data, d_iter):
+        for i in range(d_iter):
+            # get training samples
+            batch = data.next_batch(self.batch_size, increment_epoch=False)
+            # get input to generator
+            z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
+            critic_loss, c_summary, _ = self.sess.run([self.critic_loss, self.c_summ, self.opt_c],
+                                                      feed_dict={self.x: batch, self.z: z})
+            self.writer.add_summary(c_summary)
+            # clip the weights
+            self.sess.run(self.weight_clipping)
+        return critic_loss
+
+    def _update_gen(self, data, gen_iter):
+        batch = data.next_batch(self.batch_size)
+        z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
+        g_loss, g_summary, _ = self.sess.run([self.g_loss, self.g_summ, self.opt_g],
+                                                 feed_dict={self.x: batch, self.z: z})
+        self.writer.add_summary(g_summary, gen_iter)
+        return g_loss
