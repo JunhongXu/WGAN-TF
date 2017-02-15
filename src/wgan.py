@@ -123,10 +123,7 @@ class DCGAN(GAN):
     """
     def __init__(self, sess, name, batch_size=64, image_size=(32, 32, 3), z_dim=100, g_size=64, d_size=64,
                  optimizer=tf.train.RMSPropOptimizer, critic_lr=5e-5, generator_lr=5e-5):
-        """
-            d_size is the initial number of kernels for critic. It will be multiplied by 2 for the next layer.
-            g_size is the last (before output layer)number of kernels for the generator.
-        """
+
         super(DCGAN, self).__init__(sess, name, batch_size, image_size, z_dim, g_size, d_size,
                                     optimizer, critic_lr, generator_lr)
         self.weight_clipping = self._weight_clipping_op()
@@ -179,17 +176,22 @@ class DCGAN(GAN):
         normalization_params = {'is_training': is_train, 'decay': 0.9, 'updates_collections': None}
         weight_initializer = tf.random_normal_initializer(0, 0.02)
         with tf.variable_scope('generator', reuse=reuse):
+
             # first dense layer to convert input z to H/8, W/8, g_size*8
             y = layers.fully_connected(self.z, num_outputs=self.H//8*self.W//8*self.g_size*8, activation_fn=tf.nn.relu,
                                        normalizer_fn=layers.batch_norm, normalizer_params=normalization_params,
                                        scope="dense_layer", weights_initializer=weight_initializer)
+
             y = tf.reshape(y, (self.batch_size, self.H//8, self.W//8, self.g_size*8))
+
             y = layers.conv2d_transpose(y, self.g_size*4, 3, stride=2, activation_fn=tf.nn.relu,
                                         normalizer_fn=layers.batch_norm, normalizer_params=normalization_params,
                                         scope="deconv1", weights_initializer=weight_initializer)
+
             y = layers.conv2d_transpose(y, self.g_size*2, 3, stride=2, activation_fn=tf.nn.relu,
                                         normalizer_fn=layers.batch_norm, normalizer_params=normalization_params,
                                         scope="deconv2", weights_initializer=weight_initializer)
+
             y = layers.conv2d_transpose(y, self.g_size*1, 3, stride=2, activation_fn=tf.nn.relu,
                                         normalizer_fn=layers.batch_norm, normalizer_params=normalization_params,
                                         scope="deconv3", weights_initializer=weight_initializer)
@@ -205,6 +207,7 @@ class DCGAN(GAN):
                                      summaries='gradient_norm')
 
         g_loss = tf.reduce_mean(-self.fake_data_score, name="generator_loss")
+
         opt_g = layers.optimize_loss(g_loss, self.global_step, optimizer=self.optimizer(self.generator_lr),
                                      variables=self.g_params, learning_rate=self.generator_lr,
                                      name='generator_optimizer', summaries='gradient_norm')
@@ -222,9 +225,7 @@ class DCGAN(GAN):
     def train(self, data, max_steps, print_every=100):
         for step in range(max_steps):
             # get training samples
-            batch = data.next_batch(self.batch_size)[0]
-            # TODO: Need to put this into DataSet class, just to test if the implementation is correct or not for temporary use.
-            batch = np.pad(batch, ((0, 0), (2, 2), (2, 2), (0, 0)), 'constant', constant_values=0.0)
+            batch = data.next_batch(self.batch_size)
             # get input to generator
             z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
             # train critic
@@ -236,9 +237,7 @@ class DCGAN(GAN):
                 self.sess.run(self.weight_clipping)
                 # re-sample
             self.writer.add_summary(c_summary, global_step=step)
-            batch = data.next_batch(self.batch_size)[0]
-            # TODO: Need to put this into DataSet class, just to test if the implementation is correct or not for temporary use.
-            batch = np.pad(batch, ((0, 0), (2, 2), (2, 2), (0, 0)), 'constant', constant_values=0.0)
+            batch = data.next_batch(self.batch_size)
             z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
             g_loss, g_summary, _ = self.sess.run([self.g_loss, self.g_summ, self.opt_g],
                                                  feed_dict={self.x: batch, self.z: z})
