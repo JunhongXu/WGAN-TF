@@ -1,6 +1,5 @@
 import tensorflow as tf
 from tensorflow.contrib import layers as layers
-import os
 from src.utilities import *
 import numpy as np
 from scipy.misc import imsave
@@ -122,7 +121,7 @@ class DCGAN(GAN):
     Implementation of WGAN. Original paper can be found at "https://arxiv.org/abs/1701.07875"
     """
     def __init__(self, sess, name, batch_size=64, image_size=(32, 32, 3), z_dim=100, g_size=64, d_size=64,
-                 optimizer=tf.train.RMSPropOptimizer, critic_lr=5e-5, generator_lr=5e-5):
+                 optimizer=tf.train.RMSPropOptimizer, critic_lr=5e-5, generator_lr=5e-5, restore=True):
 
         super(DCGAN, self).__init__(sess, name, batch_size, image_size, z_dim, g_size, d_size,
                                     optimizer, critic_lr, generator_lr)
@@ -132,9 +131,6 @@ class DCGAN(GAN):
 
         self.sess.run(tf.global_variables_initializer())
 
-        self.writer = tf.summary.FileWriter(self.log_dir, graph=sess.graph)
-        self.saver = tf.train.Saver()
-
         # generator summary
         g_grad_summ = tf.get_collection(tf.GraphKeys.SUMMARIES, scope='generator')
         self.g_summ = tf.summary.merge(g_grad_summ + [tf.summary.scalar('generator_loss', self.g_loss)],
@@ -143,6 +139,11 @@ class DCGAN(GAN):
         c_grad_summ = tf.get_collection(tf.GraphKeys.SUMMARIES, scope='critic')
         self.c_summ = tf.summary.merge(c_grad_summ + [tf.summary.scalar('critic_loss', self.critic_loss)],
                                        name='c_summary')
+        self.writer = tf.summary.FileWriter(self.log_dir, graph=sess.graph)
+        self.saver = tf.train.Saver()
+
+        if restore:
+            self._load()
 
     def critic(self, x, reuse, is_train):
         # normalization parameters used for batch normalization
@@ -233,7 +234,7 @@ class DCGAN(GAN):
                 d_iter = self.n_critic
 
             # train critic network
-            critic_loss = self._update_critic(data, d_iter)
+            critic_loss = self._update_critic(data, d_iter, gen_iter)
 
             # update generator network
             g_loss = self._update_gen(data, gen_iter)
@@ -253,7 +254,7 @@ class DCGAN(GAN):
                 self._save()
 
     def evaluate(self, z, num_sample=1, is_train=True, step=None):
-        assert num_sample < self.batch_size, "%s should be smaller than batch size"
+        assert num_sample <= self.batch_size, "%s should be smaller than batch size"
         if is_train:
             save_path = self.images_train_dir
         else:
@@ -265,15 +266,28 @@ class DCGAN(GAN):
 
         fake_images = fake_images[random_index].reshape(num_sample, self.H, self.W) if self.C == 1 else \
                         fake_images[random_index].reshape(num_sample, self.H, self.W, self.C)
-        for index, fake_image in enumerate(fake_images):
-            imsave(os.path.join(save_path, "%s.png" % step if step is not None else index), fake_image)
+        for i, fake_image in enumerate(fake_images):
+            index = step if step is not None else str(i)
+            imsave(os.path.join(save_path, "{}.{}".format(index, 'png')), fake_image)
         print('[*]Image saving completed.')
+        return fake_images
 
     def _save(self):
         self.saver.save(self.sess, os.path.join(self.model_dir, '%s.ckpt' % self.name))
         print('[*]Model saving completed!')
 
-    def _update_critic(self, data, d_iter):
+    def _load(self):
+        print("[*]Restoring the model...")
+        ckpt = tf.train.get_checkpoint_state(self.model_dir)
+        print(ckpt, ckpt.model_checkpoint_path)
+        if ckpt and ckpt.model_checkpoint_path:
+            ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
+            self.saver.restore(self.sess, os.path.join(self.model_dir, ckpt_name))
+            print("[*]Restore the model %s successfully!" % ckpt_name)
+        else:
+            print("[!]Did not restore the model ")
+
+    def _update_critic(self, data, d_iter, gen_iter):
         for i in range(d_iter):
             # get training samples
             batch = data.next_batch(self.batch_size, increment_epoch=False)
@@ -281,7 +295,8 @@ class DCGAN(GAN):
             z = np.random.normal(0.0, 1.0, size=(self.batch_size, self.z_dim))
             critic_loss, c_summary, _ = self.sess.run([self.critic_loss, self.c_summ, self.opt_c],
                                                       feed_dict={self.x: batch, self.z: z})
-            self.writer.add_summary(c_summary)
+            if i == 0:
+                self.writer.add_summary(c_summary, gen_iter)
             # clip the weights
             self.sess.run(self.weight_clipping)
         return critic_loss
